@@ -43,5 +43,3 @@ Run twice, and watch the massive speedup!
 
 * Fix bug in stdout recall
 * Time original and new function execution
-* Fix potential collisions
-* Add way to lookup hash entries

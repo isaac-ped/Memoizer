@@ -73,24 +73,33 @@ def strarg(arg):
                     pass
                 pass
         starg = re.sub("[^A-Za-z0-9_]", "", starg)
-        if len(starg) > 50:
+        if len(starg) > 100:
             return str(hash(starg))
         return starg
 
-def run_and_capture(fn, fname, __capture_stdout, *args, **kwargs):
+def run_and_capture(fn, fname, capture_stdout, recalculate, args, kwargs,  existing=None):
     with Capturing() as captured:
         rtn = fn(*args, **kwargs)
-    output = dict(__rtn = rtn)
-    if __capture_stdout:
+    output = dict(__rtn = rtn, __args = args, __kwargs = kwargs)
+    if capture_stdout:
         if len(captured):
             output['__stdout'] = ' :: ' + ' :: '.join(list(captured))
             output['__stdout'].strip()
+
+    if existing is not None:
+        to_write = existing + [output]
+    else:
+        to_write = [output]
+
     with open(fname, 'wb') as f:
         try:
-            pickle.dump(output, f)
+            pickle.dump(to_write, f)
         except Exception as e:
             print("Coult not write output to file! {}".format(e))
     return rtn
+
+class BadMemoizationError(Exception):
+    pass
 
 def memoize_to_file(fn, dir = '', __capture_stdout=True):
     '''
@@ -102,6 +111,20 @@ def memoize_to_file(fn, dir = '', __capture_stdout=True):
         except Exception as e:
             pass
 
+    def memo_file(*args, **kwargs):
+        fname = os.path.join(dir, fn.__name__)
+        for argname, arg in zip(fn.__code__.co_varnames, args):
+            fname += '__'+argname + '-' + strarg(arg)
+
+        for argname, arg in kwargs.items():
+            fname += '__'+argname + '-' + strarg(arg)
+
+        for arg in args[len(fn.__code__.co_varnames):]:
+            fname += '__arg-' + strarg(arg)
+
+        fname += '.pickle'
+
+        return fname
 
     def wrapper(*args, **kwargs):
         '''
@@ -113,39 +136,44 @@ def memoize_to_file(fn, dir = '', __capture_stdout=True):
         Attempts to call arg.__name__ on arguments, in case they are function objects.
         '''
 
-        __recalculate = kwargs.get('__recalculate', False)
+        recalculate = kwargs.get('__recalculate', False)
         try:
-            del kwargs['__recalculate']
+            if '__recalculate' not in fn.__code__.co_varnames:
+                del kwargs['__recalculate']
         except KeyError:
             pass
 
-        fname = os.path.join(dir, fn.__name__)
-        for argname, arg in zip(fn.__code__.co_varnames, args):
-            fname += '__'+argname + '-' + strarg(arg)
-
-        for argname, arg in kwargs.items():
-            fname += '__'+argname + '-' + strarg(arg)
-
-        if len(fname) > 255:
-            fname = hash(fname)
-
-        fname += '.pickle'
-
-        if __recalculate:
-            return run_and_capture(fn, fname, __capture_stdout, *args, **kwargs)
-
+        show_stdout = kwargs.get('show_stdout', __capture_stdout)
         try:
-            with open(fname, 'rb') as f:
-                print("Loading from {}".format(fname))
-                rtn = pickle.load(f)
-                if '__stdout' in rtn and len(rtn['__stdout']) and __capture_stdout:
-                    print(":: Cached stdout:\n{}".format(rtn['__stdout']))
-                if '__rtn' in rtn:
-                    return rtn['__rtn']
-                else:
-                    return rtn
-        except Exception as e:
-            return run_and_capture(fn, fname, __capture_stdout, *args, **kwargs)
+            if 'show_stdout' not in fn.__code__.co_varnames:
+                del kwargs['show_stdout']
+        except KeyError:
+            pass
+
+        fname = memo_file(*args, **kwargs)
+
+        if recalculate:
+            return run_and_capture(fn, fname, __capture_stdout, recalculate, args, kwargs)
+
+        if not os.path.exists(fname):
+            return run_and_capture(fn, fname, __capture_stdout, recalculate, args, kwargs)
+
+        with open(fname, 'rb') as f:
+            print("Loading from {}".format(fname))
+            storeds = pickle.load(f)
+
+            for stored in storeds:
+                if stored['__kwargs'] != kwargs or stored['__args'] != args:
+                    continue
+                if '__stdout' in stored and show_stdout:
+                    print(":: Cached stdout:\n{}".format(stored['__stdout']))
+                if '__rtn' not in stored:
+                    raise BadMemoizationError("No return value stored in file!")
+                return stored['__rtn']
+
+            return run_and_capture(fn, fname, __capture_stdout, recalculate, args, kwargs, storeds)
+
+    wrapper.memo_file = memo_file
 
     return wrapper
 
