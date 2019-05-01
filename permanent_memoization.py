@@ -18,6 +18,8 @@ import os
 import re
 import sys
 import textwrap
+import glob
+import time
 try:
     from cStringIO import StringIO
 except ModuleNotFoundError:
@@ -30,10 +32,10 @@ class MemTee(object):
         # Does nothing if already being tee'd
         self.teeing = False
         self.lines = []
+        self._stdout = sys.stdout
         if isinstance(sys.stdout, MemTee):
             return
         self.teeing = True
-        self._stdout = sys.stdout
         sys.stdout = self
 
     def release(self):
@@ -111,13 +113,51 @@ def memoize_to_file(fn, dir = '', __capture_stdout=True):
         except Exception as e:
             pass
 
+    def delete_memoizations(*args, **kwargs):
+        if len(args) == 0 and len(kwargs) == 0:
+            print("WARNING: Deleting all memoizations in 5s")
+            time.sleep(5)
+
+        fname = os.path.join(dir, fn.__name__)
+        for memo_file in glob.glob(fname+'__*.pickle'):
+            if len(args) == 0 and len(kwargs) == 0:
+                print("Removing file: {}".format(memo_file))
+                os.remove(memo_file)
+                continue
+
+            with open(memo_file, 'rb') as f:
+                try:
+                    pkls = pickle.load(f)
+                except Exception as e:
+                    print("Couldn't read file {}".format(memo_file))
+                    continue
+
+                for pkl in pkls:
+                    match = True
+                    for i, arg in enumerate(args):
+                        if i >= len(pkl['__args']) or pkl['__args'][i] != arg:
+                            match = False
+                            break
+
+                    for kwk, kwv in kwargs.items():
+                        if kwk not in pkl['__kwargs'] or kwv != pkl['__kwargs'][kwk]:
+                            match = False
+                            break
+
+                    if match:
+                        print("Removing file: {}".format(memo_file))
+                        os.remove(memo_file)
+                        break
+
     def memo_file(*args, **kwargs):
         fname = os.path.join(dir, fn.__name__)
         for argname, arg in zip(fn.__code__.co_varnames, args):
-            fname += '__'+argname + '-' + strarg(arg)
+            if argname != '__recalculate':
+                fname += '__'+argname + '-' + strarg(arg)
 
         for argname, arg in kwargs.items():
-            fname += '__'+argname + '-' + strarg(arg)
+            if argname != '__recalculate':
+                fname += '__'+argname + '-' + strarg(arg)
 
         for arg in args[len(fn.__code__.co_varnames):]:
             fname += '__arg-' + strarg(arg)
@@ -174,6 +214,7 @@ def memoize_to_file(fn, dir = '', __capture_stdout=True):
             return run_and_capture(fn, fname, __capture_stdout, recalculate, args, kwargs, storeds)
 
     wrapper.memo_file = memo_file
+    wrapper.delete_memoizations = delete_memoizations
 
     return wrapper
 
